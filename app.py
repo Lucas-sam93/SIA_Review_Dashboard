@@ -48,21 +48,28 @@ def build_keyword_cloud(text_series: pd.Series):
 
     frequencies = Counter(tokens)
     cloud = WordCloud(
-        width=900,
-        height=500,
+        width=800,
+        height=420,
         background_color="white",
         stopwords=custom_stopwords,
         collocations=False,
+        max_words=40,
+        min_font_size=12,
+        max_font_size=70,
+        relative_scaling=0.4,
+        prefer_horizontal=0.9,
+        margin=6,
+        random_state=2,
     ).generate_from_frequencies(frequencies)
     return cloud, frequencies
 
 
-def linkify_wordcloud_svg(svg: str, frequencies):
+def linkify_wordcloud_svg(svg: str, frequencies, sentiment: str):
     def replacer(match):
         attrs = match.group(1)
         word = match.group(2)
         count = frequencies.get(word, 0)
-        url = f"?keyword={quote(word)}#recent-reviews"
+        url = f"?keyword={quote(word)}&sentiment={quote(sentiment)}#recent-reviews"
         if 'style="' in attrs:
             attrs = re.sub(r'style="', 'style="cursor:pointer; ', attrs, count=1)
         else:
@@ -78,11 +85,30 @@ def linkify_wordcloud_svg(svg: str, frequencies):
     return re.sub(r"<text([^>]*)>([^<]+)</text>", replacer, svg_body)
 
 
-def render_interactive_cloud(wordcloud, frequencies):
+def render_interactive_cloud(wordcloud, frequencies, sentiment: str):
     if wordcloud is None:
         return
-    svg = linkify_wordcloud_svg(wordcloud.to_svg(), frequencies)
-    st.markdown(svg, unsafe_allow_html=True)
+    svg = linkify_wordcloud_svg(wordcloud.to_svg(), frequencies, sentiment)
+    html = f"""
+<style>
+.wordcloud-wrap {{
+  background: #f7f8fb;
+  border: 1px solid #e0e6ef;
+  border-radius: 10px;
+  padding: 10px;
+}}
+.wordcloud-wrap svg {{
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}}
+</style>
+<div class="wordcloud-wrap">
+  {svg}
+</div>
+"""
+    st.markdown(html, unsafe_allow_html=True)
 
 
 @st.cache_data
@@ -303,7 +329,7 @@ with cloud_left:
         if cloud is None:
             st.info("Not enough text to build a word cloud.")
         else:
-            render_interactive_cloud(cloud, frequencies)
+            render_interactive_cloud(cloud, frequencies, "positive")
             st.caption("Most frequent terms in positive review text after removing common words. Hover for counts; click to jump to reviews.")
 
 with cloud_right:
@@ -315,7 +341,7 @@ with cloud_right:
         if cloud is None:
             st.info("Not enough text to build a word cloud.")
         else:
-            render_interactive_cloud(cloud, frequencies)
+            render_interactive_cloud(cloud, frequencies, "negative")
             st.caption("Most frequent terms in negative review text after removing common words. Hover for counts; click to jump to reviews.")
 
 st.markdown('<div id="recent-reviews"></div>', unsafe_allow_html=True)
@@ -325,8 +351,16 @@ if isinstance(keyword_param, list):
     keyword_value = keyword_param[0] if keyword_param else ""
 else:
     keyword_value = keyword_param or ""
+sentiment_param = st.query_params.get("sentiment")
+if isinstance(sentiment_param, list):
+    sentiment_value = sentiment_param[0] if sentiment_param else ""
+else:
+    sentiment_value = sentiment_param or ""
+if sentiment_value not in {"positive", "negative"}:
+    sentiment_value = ""
 if keyword_value:
-    st.info(f"Showing reviews containing '{keyword_value}'.")
+    sentiment_label = f" ({sentiment_value})" if sentiment_value else ""
+    st.info(f"Showing reviews containing '{keyword_value}'{sentiment_label}.")
     if st.button("Clear keyword filter"):
         st.query_params.clear()
         st.rerun()
@@ -340,6 +374,11 @@ if "published_date" in filtered.columns:
     preview = filtered.sort_values("published_date", ascending=False)
 else:
     preview = filtered
+
+if sentiment_value == "positive" and "rating" in preview.columns:
+    preview = preview[preview["rating"].between(4, 5)]
+elif sentiment_value == "negative" and "rating" in preview.columns:
+    preview = preview[preview["rating"].between(1, 2)]
 
 if keyword_value:
     combined = pd.Series("", index=preview.index)
